@@ -58,6 +58,76 @@ class ThresholdProfile:
         raise ValueError(f"unknown area mode {self.area_mode!r}")
 
 
+@dataclass(frozen=True)
+class NhkJbaRule:
+    category: str
+    max_flashes_per_second: float
+    max_duration_seconds: float | None = None
+    sustained_max_flashes_per_second: float | None = None
+
+
+def _nhk_rule_for_area(category: str, area_fraction: float) -> NhkJbaRule | None:
+    if category == "moderate":
+        if 0.25 <= area_fraction <= 1.0:
+            return NhkJbaRule(
+                "moderate",
+                max_flashes_per_second=5,
+                max_duration_seconds=2,
+                sustained_max_flashes_per_second=3,
+            )
+        return None
+    if category == "intermediate":
+        if 0.25 <= area_fraction < 0.80:
+            return NhkJbaRule("intermediate", max_flashes_per_second=3)
+        return None
+    if category == "scene-change":
+        if 0.80 <= area_fraction <= 1.0:
+            return NhkJbaRule("scene-change", max_flashes_per_second=1.5)
+        return None
+    raise ValueError(f"unknown NHK/JBA category {category!r}")
+
+
+def classify_nhk_jba_sdr(
+    *, brightness_change_percent: float, area_fraction: float
+) -> NhkJbaRule | None:
+    """Classify an SDR transition using the NHK/JBA ranges summarized in Table 4."""
+    if brightness_change_percent < 10:
+        return None
+    if brightness_change_percent <= 20:
+        return _nhk_rule_for_area("moderate", area_fraction)
+    return _nhk_rule_for_area("scene-change", area_fraction) or _nhk_rule_for_area(
+        "intermediate", area_fraction
+    )
+
+
+def classify_nhk_jba_hdr(
+    *, darker_luminance: float, brighter_luminance: float, area_fraction: float
+) -> NhkJbaRule | None:
+    """Classify an HDR transition using the NHK/JBA ranges summarized in Table 4."""
+    darker = min(darker_luminance, brighter_luminance)
+    brighter = max(darker_luminance, brighter_luminance)
+    difference = brighter - darker
+    if darker < 160:
+        if difference < 20:
+            return None
+        if difference <= 40:
+            return _nhk_rule_for_area("moderate", area_fraction)
+        return _nhk_rule_for_area("scene-change", area_fraction) or _nhk_rule_for_area(
+            "intermediate", area_fraction
+        )
+
+    if darker <= 0:
+        return None
+    brightness_ratio = difference / darker
+    if brightness_ratio < 1 / 8:
+        return None
+    if brightness_ratio <= 1 / 4:
+        return _nhk_rule_for_area("moderate", area_fraction)
+    return _nhk_rule_for_area("scene-change", area_fraction) or _nhk_rule_for_area(
+        "intermediate", area_fraction
+    )
+
+
 def wcag2_profile() -> ThresholdProfile:
     return ThresholdProfile(name="wcag2.2")
 

@@ -22,6 +22,9 @@ from .geometry import (
 )
 from .thresholds import ThresholdProfile, wcag2_profile
 from .thresholds import (
+    NhkJbaRule,
+    classify_nhk_jba_hdr,
+    classify_nhk_jba_sdr,
     iso_9241_391_profile,
     itu_r_bt1702_profile,
     ofcom_2017_profile,
@@ -34,6 +37,9 @@ __all__ = [
     "FlashEvent",
     "analyze_frames",
     "ThresholdProfile",
+    "NhkJbaRule",
+    "classify_nhk_jba_hdr",
+    "classify_nhk_jba_sdr",
     "iso_9241_391_profile",
     "itu_r_bt1702_profile",
     "ofcom_2017_profile",

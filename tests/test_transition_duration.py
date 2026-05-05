@@ -18,7 +18,7 @@ def test_two_frame_luminance_ramp_counts_as_transition() -> None:
 
 
 def test_slow_luminance_ramp_does_not_count_as_transition() -> None:
-    frames = [_gray(0), _gray(30), _gray(60), _gray(90), _gray(120)]
+    frames = [_gray(0), _gray(45), _gray(60), _gray(72), _gray(100)]
     profile = ThresholdProfile(name="test", area_mode="screen", max_transition_duration_ms=66)
 
     result = analyze_frames(frames, fps=30, path="memory", profile=profile)
