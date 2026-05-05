@@ -93,25 +93,87 @@ def _area_count(mask: np.ndarray, profile: ThresholdProfile) -> int:
     return int(counts.max())
 
 
-def _has_alternating_failure(events: list[FlashEvent], fps: float, max_counts: int) -> bool:
+def merge_fast_flash_events(
+    events: list[FlashEvent] | tuple[FlashEvent, ...],
+    *,
+    fast_flash_spacing_ms: float = 15.0,
+) -> list[FlashEvent]:
+    """Merge fast-flash transition sequences as proposed in Table 7.
+
+    A fast-flash sequence alternates direction, with every second transition
+    (the next transition in the same direction) separated by 15 ms or less.
+    Such a sequence counts as two transitions total for screening.
+    """
+    if len(events) < 3:
+        return list(events)
+
+    max_spacing = fast_flash_spacing_ms / 1000
+    merged: list[FlashEvent] = []
+    sequence: list[FlashEvent] = []
+
+    def flush() -> None:
+        nonlocal sequence
+        if len(sequence) >= 3:
+            first_by_direction: dict[int, FlashEvent] = {}
+            for event in sequence:
+                first_by_direction.setdefault(event.direction, event)
+            merged.extend(sorted(first_by_direction.values(), key=lambda event: event.time_seconds))
+        else:
+            merged.extend(sequence)
+        sequence = []
+
+    for event in sorted(events, key=lambda item: item.time_seconds):
+        if not sequence:
+            sequence = [event]
+            continue
+        if len(sequence) == 1:
+            if event.direction != sequence[-1].direction:
+                sequence.append(event)
+            else:
+                flush()
+                sequence = [event]
+            continue
+
+        is_alternating = event.direction != sequence[-1].direction
+        same_direction_reference = sequence[-2]
+        is_fast = event.time_seconds - same_direction_reference.time_seconds <= max_spacing
+        if is_alternating and is_fast:
+            sequence.append(event)
+        else:
+            flush()
+            sequence = [event]
+
+    flush()
+    return merged
+
+
+def count_failure_in_events(
+    events: list[FlashEvent] | tuple[FlashEvent, ...],
+    *,
+    max_transition_counts_per_second: int = 6,
+    fast_flash_spacing_ms: float = 15.0,
+) -> bool:
     by_kind = {"luminance": [], "red": []}
     for event in events:
         by_kind[event.kind].append(event)
 
     for kind_events in by_kind.values():
+        kind_events = merge_fast_flash_events(
+            kind_events, fast_flash_spacing_ms=fast_flash_spacing_ms
+        )
         for start_idx, start in enumerate(kind_events):
             window = [
                 event
                 for event in kind_events[start_idx:]
                 if event.time_seconds - start.time_seconds < 1.0
             ]
-            if len(window) <= max_counts:
+            if len(window) <= max_transition_counts_per_second:
                 continue
             alternating = [window[0]]
             for event in window[1:]:
                 if event.direction != alternating[-1].direction:
                     alternating.append(event)
-            if len(alternating) > max_counts:
+            if len(alternating) > max_transition_counts_per_second:
                 return True
     return False
 
@@ -184,7 +246,11 @@ def analyze_video(
         cap.release()
 
     failures: list[str] = []
-    if _has_alternating_failure(events, fps, profile.max_transition_counts_per_second):
+    if count_failure_in_events(
+        events,
+        max_transition_counts_per_second=profile.max_transition_counts_per_second,
+        fast_flash_spacing_ms=profile.fast_flash_spacing_ms,
+    ):
         failures.append("more than six alternating qualifying transitions in a one-second span")
 
     return AnalysisResult(
