@@ -185,11 +185,25 @@ def analyze_video(
     profile = profile or wcag2_profile()
     video_path = Path(path)
     fps, frames = read_video_frames(video_path, engine=reader, max_frames=max_frames)
+    return analyze_frames(frames, fps=fps, path=video_path, profile=profile)
+
+
+def analyze_frames(
+    frames: list[np.ndarray] | tuple[np.ndarray, ...],
+    *,
+    fps: float,
+    path: str | Path,
+    profile: ThresholdProfile | None = None,
+) -> AnalysisResult:
+    profile = profile or wcag2_profile()
+    video_path = Path(path)
     threshold_pixels: int | None = None
     previous_rgb: np.ndarray | None = None
     previous_lum: np.ndarray | None = None
+    history: list[tuple[int, np.ndarray, np.ndarray]] = []
     events: list[FlashEvent] = []
     frame_index = 0
+    max_frame_span = max(1, int(np.ceil(profile.max_transition_duration_ms * fps / 1000)))
 
     for rgb in frames:
         lum = relative_luminance(rgb)
@@ -197,10 +211,37 @@ def analyze_video(
             threshold_pixels = profile.hazardous_area_pixels(rgb.shape)
 
         if previous_rgb is not None and previous_lum is not None:
-            lum_mask, lum_direction = _luminance_transition_mask(previous_lum, lum, profile)
+            lum_up = np.zeros(lum.shape, dtype=bool)
+            lum_down = np.zeros(lum.shape, dtype=bool)
+            red_up = np.zeros(lum.shape, dtype=bool)
+            red_down = np.zeros(lum.shape, dtype=bool)
+            immediate_lum_direction = np.sign(lum - previous_lum)
+
+            for prior_index, prior_rgb, prior_lum in history:
+                if frame_index - prior_index > max_frame_span:
+                    continue
+
+                lum_mask, lum_direction = _luminance_transition_mask(prior_lum, lum, profile)
+                lum_up |= lum_mask & (lum_direction > 0) & (immediate_lum_direction > 0)
+                lum_down |= lum_mask & (lum_direction < 0) & (immediate_lum_direction < 0)
+
+                red_mask, red_direction = red_transition_mask(
+                    prior_rgb, rgb, min_ucs_distance=profile.min_red_ucs_distance
+                )
+                immediate_red_mask, immediate_red_direction = red_transition_mask(
+                    previous_rgb, rgb, min_ucs_distance=profile.min_red_ucs_distance
+                )
+                red_up |= red_mask & (red_direction > 0) & immediate_red_mask & (
+                    immediate_red_direction > 0
+                )
+                red_down |= red_mask & (red_direction < 0) & immediate_red_mask & (
+                    immediate_red_direction < 0
+                )
+
+            lum_direction = np.where(lum_up, 1, np.where(lum_down, -1, 0))
             lum_event = _dominant_event(
                 "luminance",
-                lum_mask,
+                lum_up | lum_down,
                 lum_direction,
                 profile=profile,
                 threshold_pixels=threshold_pixels,
@@ -210,12 +251,10 @@ def analyze_video(
             if lum_event is not None:
                 events.append(lum_event)
 
-            red_mask, red_direction = red_transition_mask(
-                previous_rgb, rgb, min_ucs_distance=profile.min_red_ucs_distance
-            )
+            red_direction = np.where(red_up, 1, np.where(red_down, -1, 0))
             red_event = _dominant_event(
                 "red",
-                red_mask,
+                red_up | red_down,
                 red_direction,
                 profile=profile,
                 threshold_pixels=threshold_pixels,
@@ -227,6 +266,8 @@ def analyze_video(
 
         previous_rgb = rgb
         previous_lum = lum
+        history.append((frame_index, rgb, lum))
+        history = [item for item in history if frame_index - item[0] < max_frame_span]
         frame_index += 1
 
     failures: list[str] = []

@@ -5,7 +5,7 @@ Jordan and Vanderheiden (2024), "International Guidelines for Photosensitive
 Epilepsy: Gap Analysis and Recommendations".
 """
 
-from .analysis import AnalysisResult, FlashEvent, analyze_video
+from .analysis import AnalysisResult, FlashEvent, analyze_frames, analyze_video
 from .color import (
     cie1976_ucs_distance,
     is_red_transition,
@@ -25,6 +25,7 @@ from .thresholds import ThresholdProfile, wcag2_profile
 __all__ = [
     "AnalysisResult",
     "FlashEvent",
+    "analyze_frames",
     "ThresholdProfile",
     "analyze_video",
     "cie1976_ucs_distance",
