@@ -1,45 +1,45 @@
-import csv
-import subprocess
 from pathlib import Path
 
 import pytest
 
-from tooflashy.analysis import analyze_video
-from tooflashy.thresholds import proposed_profile, wcag2_profile
+from pse_media_cases import PSE_VIDEO_CASES, collect_pse_video_cases
+from tooflashy.analysis import analyze_frames
+from tooflashy.thresholds import profile_for_standard
+from tooflashy.video import read_video_frames
 
 
-def _generate_video(repo: Path, json_file: Path) -> Path:
-    subprocess.run(
-        ["python", str(repo / "make_single_video.py"), str(json_file)],
-        cwd=repo,
-        check=True,
-        stdout=subprocess.DEVNULL,
-    )
-    video = json_file.parent / "videos" / f"{json_file.stem}.avi"
-    assert video.exists()
-    return video
+def test_all_pse_media_csv_cases_are_discovered(pse_media_repo: Path) -> None:
+    cases = collect_pse_video_cases(pse_media_repo)
+
+    assert cases
+    assert len(cases) == sum(1 for _ in (pse_media_repo / "video_creation").glob("*/*.json"))
 
 
-def _expected_results(csv_file: Path) -> dict[str, bool]:
-    with csv_file.open(newline="") as fh:
-        rows = csv.DictReader(fh)
-        return {row["filename"]: row["pass"].strip().lower() == "true" for row in rows}
+def test_all_pse_media_csv_cases_have_prebuilt_videos(pse_media_repo: Path) -> None:
+    missing = [case.video_path for case in collect_pse_video_cases(pse_media_repo) if not case.video_path.exists()]
+
+    assert not missing
 
 
-@pytest.mark.parametrize(
-    ("suite", "names", "profile"),
-    [
-        ("wcagc_30fps_area01", ["f010f005", "a010f005"], wcag2_profile()),
-        ("trace24_30fps_red01", ["f004f005s", "a003f001s"], proposed_profile()),
-    ],
-)
-def test_video_analysis_matches_selected_pse_test_media(
-    pse_media_repo: Path, suite: str, names: list[str], profile
-) -> None:
-    source_suite = pse_media_repo / "video_creation" / suite
+@pytest.mark.parametrize("case", PSE_VIDEO_CASES, ids=lambda case: case.test_id)
+def test_video_analysis_matches_pse_test_media_expectations(case) -> None:
+    fps, frames = read_video_frames(case.video_path)
+    mismatches: list[str] = []
 
-    expected = _expected_results(source_suite / f"{suite}.csv")
-    for name in names:
-        video = _generate_video(pse_media_repo, source_suite / f"{name}.json")
-        result = analyze_video(video, profile=profile)
-        assert result.passes is expected[name], result
+    for expectation in case.expectations:
+        result = analyze_frames(
+            frames,
+            fps=fps,
+            path=case.video_path,
+            profile=profile_for_standard(expectation.standard),
+        )
+        if result.passes is expectation.expected_pass:
+            continue
+
+        mismatches.append(
+            f"{expectation.standard}: expected {expectation.outcome!r} "
+            f"(passes={expectation.expected_pass}), got passes={result.passes}, "
+            f"events={len(result.events)}, failures={list(result.failures)}"
+        )
+
+    assert not mismatches, "\n".join(mismatches)

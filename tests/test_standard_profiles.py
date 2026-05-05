@@ -1,5 +1,4 @@
 import json
-import subprocess
 from pathlib import Path
 
 from tooflashy.analysis import analyze_video
@@ -10,18 +9,6 @@ from tooflashy.thresholds import (
     profile_for_standard,
     wcag2_profile,
 )
-
-
-def _generate_video(repo: Path, json_file: Path) -> Path:
-    subprocess.run(
-        ["python", str(repo / "make_single_video.py"), str(json_file)],
-        cwd=repo,
-        check=True,
-        stdout=subprocess.DEVNULL,
-    )
-    video = json_file.parent / "videos" / f"{json_file.stem}.avi"
-    assert video.exists()
-    return video
 
 
 def test_profiles_encode_area_thresholds_from_paper_table() -> None:
@@ -47,7 +34,9 @@ def test_profile_lookup_rejects_unknown_standard() -> None:
 def test_wide_area_benchmark_differs_by_standard(pse_media_repo: Path) -> None:
     json_file = pse_media_repo / "video_creation" / "wcagc_30fps_area01" / "f010f005.json"
     expected = json.loads(json_file.read_text())["expected_result"]
-    video = _generate_video(pse_media_repo, json_file)
+    video = json_file.parent / "videos" / f"{json_file.stem}.avi"
+
+    assert video.exists()
 
     for standard, factory in {
         "wcag2_2": wcag2_profile,
