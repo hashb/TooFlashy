@@ -64,3 +64,54 @@ def wcag2_profile() -> ThresholdProfile:
 
 def proposed_profile() -> ThresholdProfile:
     return ThresholdProfile(name="jordan-vanderheiden-2024-proposed", area_mode="proposed-window")
+
+
+def iso_9241_391_profile() -> ThresholdProfile:
+    return ThresholdProfile(name="iso-9241-391", area_mode="screen")
+
+
+def itu_r_bt1702_profile() -> ThresholdProfile:
+    return ThresholdProfile(name="itu-r-bt.1702", area_mode="screen")
+
+
+def ofcom_2017_profile() -> ThresholdProfile:
+    return ThresholdProfile(name="ofcom-2017", area_mode="screen")
+
+
+def expert_consensus_profile() -> ThresholdProfile:
+    return ThresholdProfile(name="expert-consensus-2005", area_mode="screen")
+
+
+def nhk_jba_sdr_profile() -> ThresholdProfile:
+    return ThresholdProfile(name="nhk-jba-sdr-2020", area_mode="screen")
+
+
+def profile_for_standard(name: str) -> ThresholdProfile:
+    normalized = name.strip().lower().replace("_", "-")
+    profiles = {
+        "wcag": wcag2_profile,
+        "wcag2": wcag2_profile,
+        "wcag2.2": wcag2_profile,
+        "wcag2-2": wcag2_profile,
+        "wcag2-1": wcag2_profile,
+        "wcag2-2-sc-2.3.1": wcag2_profile,
+        "proposed": proposed_profile,
+        "jordan-vanderheiden-2024": proposed_profile,
+        "trace24": proposed_profile,
+        "iso": iso_9241_391_profile,
+        "iso-9241-391": iso_9241_391_profile,
+        "itu": itu_r_bt1702_profile,
+        "itu-r1702": itu_r_bt1702_profile,
+        "itu-r1702-4": itu_r_bt1702_profile,
+        "itu-r-bt.1702": itu_r_bt1702_profile,
+        "ofcom": ofcom_2017_profile,
+        "ofcom2017": ofcom_2017_profile,
+        "expert": expert_consensus_profile,
+        "expert-consensus": expert_consensus_profile,
+        "nhk-jba": nhk_jba_sdr_profile,
+        "nhk-jba-sdr": nhk_jba_sdr_profile,
+    }
+    try:
+        return profiles[normalized]()
+    except KeyError as exc:
+        raise ValueError(f"unknown standard profile {name!r}") from exc

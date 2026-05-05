@@ -21,12 +21,24 @@ from .geometry import (
     visual_cortex_percent,
 )
 from .thresholds import ThresholdProfile, wcag2_profile
+from .thresholds import (
+    iso_9241_391_profile,
+    itu_r_bt1702_profile,
+    ofcom_2017_profile,
+    profile_for_standard,
+    proposed_profile,
+)
 
 __all__ = [
     "AnalysisResult",
     "FlashEvent",
     "analyze_frames",
     "ThresholdProfile",
+    "iso_9241_391_profile",
+    "itu_r_bt1702_profile",
+    "ofcom_2017_profile",
+    "profile_for_standard",
+    "proposed_profile",
     "analyze_video",
     "cie1976_ucs_distance",
     "is_red_transition",
