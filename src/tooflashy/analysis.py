@@ -74,6 +74,28 @@ def _dominant_event(
     )
 
 
+def _event_from_direction_mask(
+    kind: str,
+    mask: np.ndarray,
+    direction: int,
+    *,
+    profile: ThresholdProfile,
+    threshold_pixels: int,
+    frame_index: int,
+    fps: float,
+) -> FlashEvent | None:
+    area = _area_count(mask, profile)
+    if area < threshold_pixels:
+        return None
+    return FlashEvent(
+        kind=kind,
+        frame_index=frame_index,
+        time_seconds=frame_index / fps,
+        direction=direction,
+        area_pixels=area,
+    )
+
+
 def _area_count(mask: np.ndarray, profile: ThresholdProfile) -> int:
     if profile.area_mode == "screen":
         return int(np.count_nonzero(mask))
@@ -201,6 +223,7 @@ def analyze_frames(
     previous_rgb: np.ndarray | None = None
     previous_lum: np.ndarray | None = None
     history: list[tuple[int, np.ndarray, np.ndarray]] = []
+    pending_masks: dict[tuple[str, int], list[tuple[float, np.ndarray]]] = {}
     events: list[FlashEvent] = []
     frame_index = 0
     max_frame_span = max(1, int(np.ceil(profile.max_transition_duration_ms * fps / 1000)))
@@ -238,31 +261,24 @@ def analyze_frames(
                     immediate_red_direction < 0
                 )
 
-            lum_direction = np.where(lum_up, 1, np.where(lum_down, -1, 0))
-            lum_event = _dominant_event(
-                "luminance",
-                lum_up | lum_down,
-                lum_direction,
-                profile=profile,
-                threshold_pixels=threshold_pixels,
-                frame_index=frame_index,
-                fps=fps,
-            )
-            if lum_event is not None:
-                events.append(lum_event)
-
-            red_direction = np.where(red_up, 1, np.where(red_down, -1, 0))
-            red_event = _dominant_event(
-                "red",
-                red_up | red_down,
-                red_direction,
-                profile=profile,
-                threshold_pixels=threshold_pixels,
-                frame_index=frame_index,
-                fps=fps,
-            )
-            if red_event is not None:
-                events.append(red_event)
+            for kind, direction, mask in (
+                ("luminance", 1, lum_up),
+                ("luminance", -1, lum_down),
+                ("red", 1, red_up),
+                ("red", -1, red_down),
+            ):
+                event = _synchronized_event(
+                    kind,
+                    direction,
+                    mask,
+                    pending_masks=pending_masks,
+                    profile=profile,
+                    threshold_pixels=threshold_pixels,
+                    frame_index=frame_index,
+                    fps=fps,
+                )
+                if event is not None:
+                    events.append(event)
 
         previous_rgb = rgb
         previous_lum = lum
@@ -285,3 +301,48 @@ def analyze_frames(
         events=tuple(events),
         failures=tuple(failures),
     )
+
+
+def _synchronized_event(
+    kind: str,
+    direction: int,
+    mask: np.ndarray,
+    *,
+    pending_masks: dict[tuple[str, int], list[tuple[float, np.ndarray]]],
+    profile: ThresholdProfile,
+    threshold_pixels: int,
+    frame_index: int,
+    fps: float,
+) -> FlashEvent | None:
+    key = (kind, direction)
+    current_time = frame_index / fps
+    sync_seconds = profile.synchronized_window_ms / 1000
+    pending = [
+        (time_seconds, pending_mask)
+        for time_seconds, pending_mask in pending_masks.get(key, [])
+        if current_time - time_seconds <= sync_seconds
+    ]
+    pending_masks[key] = pending
+
+    if not np.any(mask):
+        return None
+
+    combined = mask.copy()
+    for _, pending_mask in pending:
+        combined |= pending_mask
+
+    event = _event_from_direction_mask(
+        kind,
+        combined,
+        direction,
+        profile=profile,
+        threshold_pixels=threshold_pixels,
+        frame_index=frame_index,
+        fps=fps,
+    )
+    if event is not None:
+        pending_masks[key] = []
+        return event
+
+    pending_masks.setdefault(key, []).append((current_time, mask.copy()))
+    return None
