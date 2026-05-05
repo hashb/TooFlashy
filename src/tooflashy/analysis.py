@@ -8,6 +8,7 @@ import numpy as np
 
 from .color import red_transition_mask, relative_luminance
 from .thresholds import ThresholdProfile, wcag2_profile
+from .video import read_video_frames
 
 
 @dataclass(frozen=True)
@@ -30,10 +31,6 @@ class AnalysisResult:
     @property
     def passes(self) -> bool:
         return not self.failures
-
-
-def _bgr_to_rgb(frame: np.ndarray) -> np.ndarray:
-    return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
 
 def _luminance_transition_mask(
@@ -183,67 +180,54 @@ def analyze_video(
     *,
     profile: ThresholdProfile | None = None,
     max_frames: int | None = None,
+    reader: str = "ffmpeg",
 ) -> AnalysisResult:
     profile = profile or wcag2_profile()
     video_path = Path(path)
-    cap = cv2.VideoCapture(str(video_path))
-    if not cap.isOpened():
-        raise ValueError(f"could not open video {video_path}")
-
-    fps = float(cap.get(cv2.CAP_PROP_FPS)) or 30.0
+    fps, frames = read_video_frames(video_path, engine=reader, max_frames=max_frames)
     threshold_pixels: int | None = None
     previous_rgb: np.ndarray | None = None
     previous_lum: np.ndarray | None = None
     events: list[FlashEvent] = []
     frame_index = 0
 
-    try:
-        while True:
-            ok, frame = cap.read()
-            if not ok:
-                break
-            if max_frames is not None and frame_index >= max_frames:
-                break
+    for rgb in frames:
+        lum = relative_luminance(rgb)
+        if threshold_pixels is None:
+            threshold_pixels = profile.hazardous_area_pixels(rgb.shape)
 
-            rgb = _bgr_to_rgb(frame)
-            lum = relative_luminance(rgb)
-            if threshold_pixels is None:
-                threshold_pixels = profile.hazardous_area_pixels(rgb.shape)
+        if previous_rgb is not None and previous_lum is not None:
+            lum_mask, lum_direction = _luminance_transition_mask(previous_lum, lum, profile)
+            lum_event = _dominant_event(
+                "luminance",
+                lum_mask,
+                lum_direction,
+                profile=profile,
+                threshold_pixels=threshold_pixels,
+                frame_index=frame_index,
+                fps=fps,
+            )
+            if lum_event is not None:
+                events.append(lum_event)
 
-            if previous_rgb is not None and previous_lum is not None:
-                lum_mask, lum_direction = _luminance_transition_mask(previous_lum, lum, profile)
-                lum_event = _dominant_event(
-                    "luminance",
-                    lum_mask,
-                    lum_direction,
-                    profile=profile,
-                    threshold_pixels=threshold_pixels,
-                    frame_index=frame_index,
-                    fps=fps,
-                )
-                if lum_event is not None:
-                    events.append(lum_event)
+            red_mask, red_direction = red_transition_mask(
+                previous_rgb, rgb, min_ucs_distance=profile.min_red_ucs_distance
+            )
+            red_event = _dominant_event(
+                "red",
+                red_mask,
+                red_direction,
+                profile=profile,
+                threshold_pixels=threshold_pixels,
+                frame_index=frame_index,
+                fps=fps,
+            )
+            if red_event is not None:
+                events.append(red_event)
 
-                red_mask, red_direction = red_transition_mask(
-                    previous_rgb, rgb, min_ucs_distance=profile.min_red_ucs_distance
-                )
-                red_event = _dominant_event(
-                    "red",
-                    red_mask,
-                    red_direction,
-                    profile=profile,
-                    threshold_pixels=threshold_pixels,
-                    frame_index=frame_index,
-                    fps=fps,
-                )
-                if red_event is not None:
-                    events.append(red_event)
-
-            previous_rgb = rgb
-            previous_lum = lum
-            frame_index += 1
-    finally:
-        cap.release()
+        previous_rgb = rgb
+        previous_lum = lum
+        frame_index += 1
 
     failures: list[str] = []
     if count_failure_in_events(
