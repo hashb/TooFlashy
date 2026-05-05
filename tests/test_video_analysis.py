@@ -1,12 +1,12 @@
 import csv
 import os
-import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
 from tooflashy.analysis import analyze_video
+from tooflashy.thresholds import proposed_profile, wcag2_profile
 
 
 MEDIA_REPO = "https://github.com/traceRERC/pse-test-media"
@@ -43,25 +43,23 @@ def _generate_video(repo: Path, json_file: Path) -> Path:
 def _expected_results(csv_file: Path) -> dict[str, bool]:
     with csv_file.open(newline="") as fh:
         rows = csv.DictReader(fh)
-        return {row["filename"]: row["expected"].strip().lower() == "pass" for row in rows}
+        return {row["filename"]: row["pass"].strip().lower() == "true" for row in rows}
 
 
 @pytest.mark.parametrize(
-    ("suite", "names"),
+    ("suite", "names", "profile"),
     [
-        ("wcagc_30fps_area01", ["f010f005", "a010f005"]),
-        ("trace24_30fps_red01", ["f004f005s", "a003f001s"]),
+        ("wcagc_30fps_area01", ["f010f005", "a010f005"], wcag2_profile()),
+        ("trace24_30fps_red01", ["f004f005s", "a003f001s"], proposed_profile()),
     ],
 )
 def test_video_analysis_matches_selected_pse_test_media(
-    pse_media_repo: Path, tmp_path: Path, suite: str, names: list[str]
+    pse_media_repo: Path, suite: str, names: list[str], profile
 ) -> None:
     source_suite = pse_media_repo / "video_creation" / suite
-    work_suite = tmp_path / suite
-    shutil.copytree(source_suite, work_suite)
 
-    expected = _expected_results(work_suite / f"{suite}.csv")
+    expected = _expected_results(source_suite / f"{suite}.csv")
     for name in names:
-        video = _generate_video(pse_media_repo, work_suite / f"{name}.json")
-        result = analyze_video(video)
+        video = _generate_video(pse_media_repo, source_suite / f"{name}.json")
+        result = analyze_video(video, profile=profile)
         assert result.passes is expected[name], result
