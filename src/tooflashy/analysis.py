@@ -107,7 +107,8 @@ def _luminance_transition_direction_masks(
     denom = brighter + darker
     low_range = darker < 0.8 * profile.reference_luminance
     michelson = np.divide(diff, denom, out=np.zeros_like(diff), where=denom != 0)
-    mask = (low_range & (diff >= 0.1 * profile.reference_luminance)) | (
+    lum_threshold = 0.1 * profile.reference_luminance * profile.encoded_area_tolerance
+    mask = (low_range & (diff >= lum_threshold)) | (
         ~low_range & (michelson >= 1 / 17)
     )
     return (
@@ -307,6 +308,7 @@ def analyze_frames(
     history: list[_FrameFeatures] = []
     pending_masks: dict[tuple[str, int], list[tuple[float, np.ndarray]]] = {}
     events: list[FlashEvent] = []
+    last_direction: dict[str, int] = {"luminance": 0, "red": 0}
     frame_index = 0
     max_frame_span = max(1, int(np.ceil(profile.max_transition_duration_ms * fps / 1000)))
 
@@ -366,8 +368,9 @@ def analyze_frames(
                     frame_index=frame_index,
                     fps=fps,
                 )
-                if event is not None:
+                if event is not None and last_direction[kind] != direction:
                     events.append(event)
+                    last_direction[kind] = direction
 
         previous = current
         history.append(current)
