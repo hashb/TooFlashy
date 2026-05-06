@@ -325,11 +325,15 @@ def analyze_frames(
             red_down = np.zeros(current.luminance.shape, dtype=bool)
             immediate_lum_up = current.luminance > previous.luminance
             immediate_lum_down = current.luminance < previous.luminance
-            immediate_red_up, immediate_red_down = _red_transition_direction_masks(
-                previous,
-                current,
-                min_ucs_distance=profile.min_red_ucs_distance,
-            )
+            if profile.count_red_transitions:
+                immediate_red_up, immediate_red_down = _red_transition_direction_masks(
+                    previous,
+                    current,
+                    min_ucs_distance=profile.min_red_ucs_distance,
+                )
+            else:
+                immediate_red_up = np.zeros(current.luminance.shape, dtype=bool)
+                immediate_red_down = np.zeros(current.luminance.shape, dtype=bool)
 
             for prior in history:
                 if frame_index - prior.frame_index > max_frame_span:
@@ -345,13 +349,14 @@ def analyze_frames(
                 lum_up |= prior_lum_up
                 lum_down |= prior_lum_down
 
-                prior_red_up, prior_red_down = _red_transition_direction_masks(
-                    prior,
-                    current,
-                    min_ucs_distance=profile.min_red_ucs_distance,
-                )
-                red_up |= prior_red_up & immediate_red_up
-                red_down |= prior_red_down & immediate_red_down
+                if profile.count_red_transitions:
+                    prior_red_up, prior_red_down = _red_transition_direction_masks(
+                        prior,
+                        current,
+                        min_ucs_distance=profile.min_red_ucs_distance,
+                    )
+                    red_up |= prior_red_up & immediate_red_up
+                    red_down |= prior_red_down & immediate_red_down
 
             for kind, direction, mask in (
                 ("luminance", 1, lum_up),

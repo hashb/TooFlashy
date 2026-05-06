@@ -33,6 +33,7 @@ class ThresholdProfile:
     fast_flash_spacing_ms: float = 15.0
     max_transition_counts_per_second: int = 6
     min_red_ucs_distance: float = 0.2
+    count_red_transitions: bool = True
     area_mode: str = "wcag-window"
     area_window: tuple[int, int] = (341, 256)
     area_fraction: float = 0.25
@@ -138,15 +139,15 @@ def proposed_profile() -> ThresholdProfile:
 
 
 def iso_9241_391_profile() -> ThresholdProfile:
-    return ThresholdProfile(name="iso-9241-391", area_mode="screen")
+    return ThresholdProfile(name="iso-9241-391", area_mode="screen", count_red_transitions=False)
 
 
 def itu_r_bt1702_profile() -> ThresholdProfile:
-    return ThresholdProfile(name="itu-r-bt.1702", area_mode="screen")
+    return ThresholdProfile(name="itu-r-bt.1702", area_mode="screen", count_red_transitions=False)
 
 
 def ofcom_2017_profile() -> ThresholdProfile:
-    return ThresholdProfile(name="ofcom-2017", area_mode="screen")
+    return ThresholdProfile(name="ofcom-2017", area_mode="screen", count_red_transitions=False)
 
 
 def expert_consensus_profile() -> ThresholdProfile:
