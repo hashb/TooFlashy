@@ -28,6 +28,8 @@ def _ffmpeg_command(
         "error",
         "-i",
         str(path),
+        "-vf",
+        "scale=in_color_matrix=bt709:out_color_matrix=bt709",
     ]
     if max_frames is not None:
         command.extend(["-frames:v", str(max_frames)])

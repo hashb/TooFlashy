@@ -37,7 +37,7 @@ class ThresholdProfile:
     area_window: tuple[int, int] = (341, 256)
     area_fraction: float = 0.25
     area_threshold_tolerance: float = 1.0
-    encoded_area_tolerance: float = 0.995
+    encoded_area_tolerance: float = 1.005
 
     def hazardous_area_pixels(self, frame_shape: tuple[int, int] | tuple[int, int, int]) -> int:
         height, width = frame_shape[:2]
