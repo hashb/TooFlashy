@@ -13,7 +13,7 @@ class PseExpectation:
 
     @property
     def expected_pass(self) -> bool:
-        return self.outcome == "pass"
+        return not self.outcome.startswith("fail")
 
 
 @dataclass(frozen=True)
