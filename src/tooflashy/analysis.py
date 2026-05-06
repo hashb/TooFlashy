@@ -311,7 +311,7 @@ def analyze_frames(
     events: list[FlashEvent] = []
     last_direction: dict[str, int] = {"luminance": 0, "red": 0}
     frame_index = 0
-    max_frame_span = max(1, int(np.ceil(profile.max_transition_duration_ms * fps / 1000)))
+    max_frame_span = max(1, int(np.floor(profile.max_transition_duration_ms * fps / 1000)))
 
     for rgb in frames:
         current = _frame_features(rgb, frame_index)
