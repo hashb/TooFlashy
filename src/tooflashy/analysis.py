@@ -256,6 +256,7 @@ def count_failure_in_events(
     max_transition_counts_per_second: int = 6,
     fast_flash_spacing_ms: float = 15.0,
 ) -> bool:
+    one_second_epsilon = 1e-9
     by_kind = {"luminance": [], "red": []}
     for event in events:
         by_kind[event.kind].append(event)
@@ -268,7 +269,7 @@ def count_failure_in_events(
             window = [
                 event
                 for event in kind_events[start_idx:]
-                if event.time_seconds - start.time_seconds < 1.0
+                if event.time_seconds - start.time_seconds < 1.0 - one_second_epsilon
             ]
             if len(window) <= max_transition_counts_per_second:
                 continue

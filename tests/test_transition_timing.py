@@ -18,6 +18,12 @@ def test_slow_or_non_alternating_transitions_do_not_fail() -> None:
     assert not count_failure_in_events(slow)
 
 
+def test_transition_exactly_one_second_later_is_outside_count_window() -> None:
+    events = [_event(i, i / 30, 1 if i % 2 else -1) for i in (0, 1, 10, 11, 20, 21, 30)]
+
+    assert not count_failure_in_events(events)
+
+
 def test_fast_flashes_merge_to_two_transition_counts() -> None:
     events = [
         _event(0, 0.000, 1),
