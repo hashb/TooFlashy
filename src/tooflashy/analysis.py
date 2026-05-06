@@ -1,14 +1,22 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import cv2
 import numpy as np
 
-from .color import red_transition_mask, relative_luminance
 from .thresholds import ThresholdProfile, wcag2_profile
-from .video import read_video_frames
+from .video import iter_video_frames
+
+
+_SRGB_VALUES = np.arange(256, dtype=np.float64) / 255.0
+_SRGB_LINEAR_LUT = np.where(
+    _SRGB_VALUES <= 0.04045,
+    _SRGB_VALUES / 12.92,
+    ((_SRGB_VALUES + 0.055) / 1.055) ** 2.4,
+)
 
 
 @dataclass(frozen=True)
@@ -33,19 +41,94 @@ class AnalysisResult:
         return not self.failures
 
 
-def _luminance_transition_mask(
-    previous_lum: np.ndarray, current_lum: np.ndarray, profile: ThresholdProfile
+@dataclass(frozen=True)
+class _FrameFeatures:
+    frame_index: int
+    luminance: np.ndarray
+    saturated_red: np.ndarray
+    u: np.ndarray
+    v: np.ndarray
+
+
+def _linear_channels(rgb: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    values = np.asarray(rgb)
+    if values.dtype == np.uint8:
+        return (
+            _SRGB_LINEAR_LUT[values[..., 0]],
+            _SRGB_LINEAR_LUT[values[..., 1]],
+            _SRGB_LINEAR_LUT[values[..., 2]],
+        )
+
+    values = values.astype(np.float64, copy=False)
+    if np.nanmax(values) > 1.0:
+        values = values / 255.0
+    linear = np.where(
+        values <= 0.04045,
+        values / 12.92,
+        ((values + 0.055) / 1.055) ** 2.4,
+    )
+    return linear[..., 0], linear[..., 1], linear[..., 2]
+
+
+def _frame_features(rgb: np.ndarray, frame_index: int) -> _FrameFeatures:
+    r, g, b = _linear_channels(rgb)
+    luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+    total = r + g + b
+    saturated_red = np.divide(r, total, out=np.zeros_like(total), where=total > 0) >= 0.8
+
+    x = 0.4124564 * r + 0.3575761 * g + 0.1804375 * b
+    y = 0.2126729 * r + 0.7151522 * g + 0.0721750 * b
+    z = 0.0193339 * r + 0.1191920 * g + 0.9503041 * b
+    denom = x + 15 * y + 3 * z
+    u = np.divide(4 * x, denom, out=np.zeros_like(denom), where=denom != 0)
+    v = np.divide(9 * y, denom, out=np.zeros_like(denom), where=denom != 0)
+
+    return _FrameFeatures(
+        frame_index=frame_index,
+        luminance=luminance,
+        saturated_red=saturated_red,
+        u=u,
+        v=v,
+    )
+
+
+def _luminance_transition_direction_masks(
+    previous_lum: np.ndarray,
+    current_lum: np.ndarray,
+    *,
+    immediate_up: np.ndarray,
+    immediate_down: np.ndarray,
+    profile: ThresholdProfile,
 ) -> tuple[np.ndarray, np.ndarray]:
     darker = np.minimum(previous_lum, current_lum)
     brighter = np.maximum(previous_lum, current_lum)
     diff = brighter - darker
+    denom = brighter + darker
     low_range = darker < 0.8 * profile.reference_luminance
-    michelson = np.divide(diff, brighter + darker, out=np.zeros_like(diff), where=(brighter + darker) != 0)
+    michelson = np.divide(diff, denom, out=np.zeros_like(diff), where=denom != 0)
     mask = (low_range & (diff >= 0.1 * profile.reference_luminance)) | (
         ~low_range & (michelson >= 1 / 17)
     )
-    direction = np.where(current_lum > previous_lum, 1, -1)
-    return mask, direction
+    return (
+        mask & (current_lum > previous_lum) & immediate_up,
+        mask & (current_lum < previous_lum) & immediate_down,
+    )
+
+
+def _red_transition_direction_masks(
+    previous: _FrameFeatures,
+    current: _FrameFeatures,
+    *,
+    min_ucs_distance: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    one_saturated = np.logical_xor(previous.saturated_red, current.saturated_red)
+    distance_sq = (current.u - previous.u) ** 2 + (current.v - previous.v) ** 2
+    mask = one_saturated & (distance_sq >= min_ucs_distance * min_ucs_distance)
+    return (
+        mask & current.saturated_red & ~previous.saturated_red,
+        mask & previous.saturated_red & ~current.saturated_red,
+    )
 
 
 def _dominant_event(
@@ -206,12 +289,12 @@ def analyze_video(
 ) -> AnalysisResult:
     profile = profile or wcag2_profile()
     video_path = Path(path)
-    fps, frames = read_video_frames(video_path, engine=reader, max_frames=max_frames)
+    fps, frames = iter_video_frames(video_path, engine=reader, max_frames=max_frames)
     return analyze_frames(frames, fps=fps, path=video_path, profile=profile)
 
 
 def analyze_frames(
-    frames: list[np.ndarray] | tuple[np.ndarray, ...],
+    frames: Iterable[np.ndarray],
     *,
     fps: float,
     path: str | Path,
@@ -220,46 +303,52 @@ def analyze_frames(
     profile = profile or wcag2_profile()
     video_path = Path(path)
     threshold_pixels: int | None = None
-    previous_rgb: np.ndarray | None = None
-    previous_lum: np.ndarray | None = None
-    history: list[tuple[int, np.ndarray, np.ndarray]] = []
+    previous: _FrameFeatures | None = None
+    history: list[_FrameFeatures] = []
     pending_masks: dict[tuple[str, int], list[tuple[float, np.ndarray]]] = {}
     events: list[FlashEvent] = []
     frame_index = 0
     max_frame_span = max(1, int(np.ceil(profile.max_transition_duration_ms * fps / 1000)))
 
     for rgb in frames:
-        lum = relative_luminance(rgb)
+        current = _frame_features(rgb, frame_index)
         if threshold_pixels is None:
             threshold_pixels = profile.hazardous_area_pixels(rgb.shape)
 
-        if previous_rgb is not None and previous_lum is not None:
-            lum_up = np.zeros(lum.shape, dtype=bool)
-            lum_down = np.zeros(lum.shape, dtype=bool)
-            red_up = np.zeros(lum.shape, dtype=bool)
-            red_down = np.zeros(lum.shape, dtype=bool)
-            immediate_lum_direction = np.sign(lum - previous_lum)
+        if previous is not None:
+            lum_up = np.zeros(current.luminance.shape, dtype=bool)
+            lum_down = np.zeros(current.luminance.shape, dtype=bool)
+            red_up = np.zeros(current.luminance.shape, dtype=bool)
+            red_down = np.zeros(current.luminance.shape, dtype=bool)
+            immediate_lum_up = current.luminance > previous.luminance
+            immediate_lum_down = current.luminance < previous.luminance
+            immediate_red_up, immediate_red_down = _red_transition_direction_masks(
+                previous,
+                current,
+                min_ucs_distance=profile.min_red_ucs_distance,
+            )
 
-            for prior_index, prior_rgb, prior_lum in history:
-                if frame_index - prior_index > max_frame_span:
+            for prior in history:
+                if frame_index - prior.frame_index > max_frame_span:
                     continue
 
-                lum_mask, lum_direction = _luminance_transition_mask(prior_lum, lum, profile)
-                lum_up |= lum_mask & (lum_direction > 0) & (immediate_lum_direction > 0)
-                lum_down |= lum_mask & (lum_direction < 0) & (immediate_lum_direction < 0)
+                prior_lum_up, prior_lum_down = _luminance_transition_direction_masks(
+                    prior.luminance,
+                    current.luminance,
+                    immediate_up=immediate_lum_up,
+                    immediate_down=immediate_lum_down,
+                    profile=profile,
+                )
+                lum_up |= prior_lum_up
+                lum_down |= prior_lum_down
 
-                red_mask, red_direction = red_transition_mask(
-                    prior_rgb, rgb, min_ucs_distance=profile.min_red_ucs_distance
+                prior_red_up, prior_red_down = _red_transition_direction_masks(
+                    prior,
+                    current,
+                    min_ucs_distance=profile.min_red_ucs_distance,
                 )
-                immediate_red_mask, immediate_red_direction = red_transition_mask(
-                    previous_rgb, rgb, min_ucs_distance=profile.min_red_ucs_distance
-                )
-                red_up |= red_mask & (red_direction > 0) & immediate_red_mask & (
-                    immediate_red_direction > 0
-                )
-                red_down |= red_mask & (red_direction < 0) & immediate_red_mask & (
-                    immediate_red_direction < 0
-                )
+                red_up |= prior_red_up & immediate_red_up
+                red_down |= prior_red_down & immediate_red_down
 
             for kind, direction, mask in (
                 ("luminance", 1, lum_up),
@@ -280,10 +369,9 @@ def analyze_frames(
                 if event is not None:
                     events.append(event)
 
-        previous_rgb = rgb
-        previous_lum = lum
-        history.append((frame_index, rgb, lum))
-        history = [item for item in history if frame_index - item[0] < max_frame_span]
+        previous = current
+        history.append(current)
+        history = [item for item in history if frame_index - item.frame_index < max_frame_span]
         frame_index += 1
 
     failures: list[str] = []
