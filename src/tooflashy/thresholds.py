@@ -36,16 +36,17 @@ class ThresholdProfile:
     area_mode: str = "wcag-window"
     area_window: tuple[int, int] = (341, 256)
     area_fraction: float = 0.25
+    area_threshold_tolerance: float = 1.0
     encoded_area_tolerance: float = 0.995
 
     def hazardous_area_pixels(self, frame_shape: tuple[int, int] | tuple[int, int, int]) -> int:
         height, width = frame_shape[:2]
         if self.area_mode == "screen":
             pixels = width * height * self.area_fraction
-            return max(1, int(round(pixels * self.encoded_area_tolerance)))
+            return max(1, int(round(pixels * self.area_threshold_tolerance)))
         window_w, window_h = self.window_size(frame_shape)
         pixels = window_w * window_h * self.area_fraction
-        return max(1, int(round(pixels * self.encoded_area_tolerance)))
+        return max(1, int(round(pixels * self.area_threshold_tolerance)))
 
     def window_size(self, frame_shape: tuple[int, int] | tuple[int, int, int]) -> tuple[int, int]:
         height, width = frame_shape[:2]
